@@ -481,18 +481,23 @@ class File(Timestamped, Nameable):
     async def fetch(self) -> "File":
         from aiohttp import ClientResponseError
 
-        with self.store.save(self.store_path(), self.get_mtime()) as f:
-            try:
-                await self.client.download(self.api_path(), f)
-            except ClientResponseError as e:
-                if e.status == 404:
-                    # TODO: slightly jank
+        try:
+            with self.store.save(self.store_path(), self.get_mtime()) as f:
+                try:
+                    await self.client.download(self.api_path(), f)
+                except ClientResponseError as e:
+                    if e.status != 404:
+                        raise
                     await self.client.download(
-                        f"{self.file_list.organization.uuid}/files/{self.uuid}/preview",
+                        f"{self.file_list.organization.api_path()}/files/{self.uuid}/preview",
                         f,
                     )
-                else:
-                    raise
+        except ClientResponseError as e:
+            if e.status != 404:
+                raise
+            # Unreachable file: nothing is saved, so the next sync retries it;
+            # the rest of the sync goes on.
+            print(f"unreachable file {self.uuid} ({self.slug()}): 404", file=sys.stderr)
         return self
 
 
