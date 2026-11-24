@@ -153,7 +153,8 @@ class Client:
                     r.request_info,
                     r.history,
                     status=r.status,
-                    message=await r.text() if r.status == 404 else r.reason or "",
+                    message=await r.text() if r.status == 404 else
+                    (r.reason or "") + (f" cf-mitigated={r.headers['cf-mitigated']}" if "cf-mitigated" in r.headers else ""),
                     headers=r.headers,
                 )
 
