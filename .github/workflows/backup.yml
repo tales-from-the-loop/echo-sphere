@@ -4,8 +4,8 @@
 # Storage in R2 comes next.
 # This fork is public (forks of public repos can't be private), so run logs are
 # public too: the job prints counts only — no chat names, file names or paths.
-# The sessionKey cookie comes from 1Password (vault "loop") via the org secret
-# OP_SERVICE_ACCOUNT_TOKEN; it is never printed.
+# The sessionKey cookie comes from 1Password (vault "Github_TFTL") via the org
+# secret OP_SERVICE_ACCOUNT_TOKEN; it is never printed.
 name: backup
 on:
   workflow_dispatch:
@@ -29,7 +29,7 @@ jobs:
         uses: 1password/load-secrets-action@v5
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
-          SESSION_KEY: op://loop/claude-ai-session-key/credential
+          SESSION_KEY: op://Github_TFTL/claude-ai-session-key/credential
       - name: Back up
         env:
           SESSION_KEY: ${{ steps.op.outputs.SESSION_KEY }}
@@ -39,7 +39,7 @@ jobs:
             code=$?
             echo "::error::claude-backup exited with $code"
             if grep -qiE '401|403|unauthorized|forbidden' "$RUNNER_TEMP/stderr.log"; then
-              echo "::error::Login failed: the sessionKey in 1Password (loop/claude-ai-session-key) has probably expired. Copy a fresh one from claude.ai."
+              echo "::error::Login failed: the sessionKey in 1Password (Github_TFTL/claude-ai-session-key) has probably expired. Copy a fresh one from claude.ai."
             else
               # error class only: the full traceback may contain chat or file names
               grep -oE '[A-Za-z]+(Error|Exception)' "$RUNNER_TEMP/stderr.log" | sort | uniq -c | head -5
