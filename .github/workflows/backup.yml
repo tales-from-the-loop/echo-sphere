@@ -30,6 +30,20 @@ jobs:
         env:
           OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
           SESSION_KEY: op://Github_TFTL/claude-ai-session-key/credential
+      - name: Check login (status only)
+        env:
+          SESSION_KEY: ${{ steps.op.outputs.SESSION_KEY }}
+        run: |
+          k="$(printf '%s' "$SESSION_KEY" | tr -d '[:space:]')"
+          case "$k" in sk-ant-*) echo "key: starts with sk-ant-, length ${#k}";; *) echo "::error::key does not start with sk-ant- (length ${#k})";; esac
+          code=$(curl -s -o "$RUNNER_TEMP/b" -D "$RUNNER_TEMP/h" -w '%{http_code}' -H "Cookie: sessionKey=$k" \
+            -H 'User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36' \
+            https://claude.ai/api/organizations)
+          echo "claude.ai/api/organizations: HTTP $code"
+          grep -qi '^cf-mitigated: *challenge' "$RUNNER_TEMP/h" && echo "Cloudflare challenge: yes (GitHub runner IP is blocked)" || echo "Cloudflare challenge: no"
+          grep -qiE 'just a moment|challenge-platform' "$RUNNER_TEMP/b" && echo "body: Cloudflare challenge page" || true
+          head -c1 "$RUNNER_TEMP/b" | grep -q '\[' && echo "body: JSON list (login works)" || true
+          grep -oE '"type" *: *"[a-z_]+"' "$RUNNER_TEMP/b" | head -3 || true
       - name: Back up
         env:
           SESSION_KEY: ${{ steps.op.outputs.SESSION_KEY }}
@@ -38,12 +52,8 @@ jobs:
           printf '%s\n' "$SESSION_KEY" | claude-backup "$RUNNER_TEMP/backup" 2> "$RUNNER_TEMP/stderr.log" > "$RUNNER_TEMP/stdout.log" || {
             code=$?
             echo "::error::claude-backup exited with $code"
-            if grep -qiE '401|403|unauthorized|forbidden' "$RUNNER_TEMP/stderr.log"; then
-              echo "::error::Login failed: the sessionKey in 1Password (Github_TFTL/claude-ai-session-key) has probably expired. Copy a fresh one from claude.ai."
-            else
-              # error class only: the full traceback may contain chat or file names
-              grep -oE '[A-Za-z]+(Error|Exception)' "$RUNNER_TEMP/stderr.log" | sort | uniq -c | head -5
-            fi
+            grep -oE '\b(401|403|429|5[0-9]{2})\b[^,]{0,40}' "$RUNNER_TEMP/stderr.log" | sed -E 's#https?://[^ ]*##g' | sort | uniq -c | head -5 || true
+            grep -oE '[A-Za-z]+(Error|Exception)' "$RUNNER_TEMP/stderr.log" | sort | uniq -c | head -5 || true
             exit $code
           }
       - name: Summary
