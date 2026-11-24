@@ -108,7 +108,9 @@ class Client:
         from fake_useragent import UserAgent
         from yarl import URL
 
-        headers = {"User-Agent": UserAgent().chrome}
+        # a fixed User-Agent from the caller: a random one (fake_useragent) got a Cloudflare challenge on the very first
+        # request from homesrv while a fixed Chrome one from the same address passed (24.11.2026)
+        headers = {"User-Agent": os.environ.get("CLAUDE_BACKUP_USER_AGENT") or UserAgent().chrome}
 
         jar = CookieJar()
         jar.update_cookies({"sessionKey": self.session_key}, URL("https://claude.ai/"))
