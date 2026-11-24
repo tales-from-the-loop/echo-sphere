@@ -375,9 +375,19 @@ class Nameable(APIObject):
         # api seems to use {"name": ""} to mean {"name": null}
         return cast(str, self._data.get("name")) or None
 
+    # Store.save writes "<slug>-<8 random chars>" next to the target, and a file name is at most 255 bytes.
+    # Longer names are cut on a UTF-8 boundary; names that fit keep their old slug (and their stored path).
+    SLUG_MAX_BYTES = 255 - 9
+
     def slug(self) -> str:
         if self.name:
-            return f"{self.name.translate(self.FILENAME_XLAT)}-{self.uuid}"
+            tail = f"-{self.uuid}"
+            name = self.name.translate(self.FILENAME_XLAT)
+            room = self.SLUG_MAX_BYTES - len(tail.encode())
+            raw = name.encode()
+            if len(raw) > room:
+                name = raw[:room].decode("utf-8", "ignore")
+            return f"{name}{tail}"
         return self.uuid
 
     def __str__(self) -> str:
