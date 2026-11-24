@@ -136,34 +136,48 @@ class Client:
         return await self.session.__aexit__(exc_type, exc_val, exc_tb)
 
     async def _download(self, path: str, sink: IO[bytes]) -> None:
-        from aiohttp import ClientResponseError
+        # urllib in a worker thread instead of aiohttp (24.11.2026): from homesrv Cloudflare answered every aiohttp
+        # request with 403 cf-mitigated=challenge (plain, with ALPN http/1.1, with Accept-Encoding identity), while
+        # urllib with the same cookie and User-Agent from the same container got 200 on the same paths.
+        import asyncio
 
-        # i have never seen a 429 or in fact a 4xx error of any kind from this
-        # api, nor ratelimit headers or fields on the returned stuff (i've seen
-        # 403 Forbidden from cloudflare, in front of claude.ai, but only behind
-        # vpn, i.e. totally blocked, and even then no ratelimit headers), so we
-        # will have to cross our fingers and hope our rate and conn limiting is
-        # enough not to break anything...
-        async with self.session.get(
-            f"https://claude.ai/api/{path}",
-            allow_redirects=False,  # csrf defense for very silly threat model
-        ) as r:
-            # explicitly check r.status instead of using r.raise_for_status
-            # because we want to raise for r.status >= 300 not just >= 400
-            if not 200 <= r.status < 300:
-                raise ClientResponseError(
-                    r.request_info,
-                    r.history,
-                    status=r.status,
-                    message=await r.text() if r.status == 404 else
-                    (r.reason or "") + (f" cf-mitigated={r.headers['cf-mitigated']}" if "cf-mitigated" in r.headers else ""),
-                    headers=r.headers,
-                )
+        await asyncio.to_thread(self._download_sync, path, sink)
 
-            if r.content_length is not None:
-                sink.truncate(r.content_length)
-            async for chunk in r.content.iter_any():
-                sink.write(chunk)
+    def _download_sync(self, path: str, sink: IO[bytes]) -> None:
+        import urllib.error
+        import urllib.request
+
+        from aiohttp import ClientResponseError, RequestInfo
+        from multidict import CIMultiDict, CIMultiDictProxy
+        from yarl import URL
+
+        url = f"https://claude.ai/api/{path}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": self.session.headers.get("User-Agent", ""),
+            "Cookie": f"sessionKey={self.session_key}",
+            "Accept": "application/json",
+        })
+
+        def fail(status: int, reason: str, headers, body: str = "") -> ClientResponseError:
+            info = RequestInfo(URL(url), "GET", CIMultiDictProxy(CIMultiDict()), URL(url))
+            cf = headers.get("cf-mitigated") if headers is not None else None
+            message = body if status == 404 else (reason or "") + (f" cf-mitigated={cf}" if cf else "")
+            return ClientResponseError(info, (), status=status, message=message, headers=headers)
+
+        class NoRedirect(urllib.request.HTTPRedirectHandler):  # csrf defense for very silly threat model
+            def redirect_request(self, *args, **kwargs):
+                return None
+
+        opener = urllib.request.build_opener(NoRedirect)
+        try:
+            with opener.open(req, timeout=300) as r:
+                if not 200 <= r.status < 300:
+                    raise fail(r.status, r.reason, r.headers)
+                while chunk := r.read(1 << 16):
+                    sink.write(chunk)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace") if e.code == 404 else ""
+            raise fail(e.code, e.reason, e.headers, body) from None
 
     async def download(self, path: str, sink: IO[bytes]) -> None:
         import asyncio
