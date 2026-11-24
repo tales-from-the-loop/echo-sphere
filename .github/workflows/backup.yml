@@ -1,7 +1,9 @@
 # Back up all claude.ai chats (LAB-88).
 # Stage 1: check only — the backup is made in the runner's temp dir and thrown
-# away; the summary shows how many chats and files came through and which files
-# were unreachable. Storage in R2 comes next.
+# away; the summary shows how many chats and files came through.
+# Storage in R2 comes next.
+# This fork is public (forks of public repos can't be private), so run logs are
+# public too: the job prints counts only — no chat names, file names or paths.
 # The sessionKey cookie comes from 1Password (vault "loop") via the org secret
 # OP_SERVICE_ACCOUNT_TOKEN; it is never printed.
 name: backup
@@ -38,8 +40,10 @@ jobs:
             echo "::error::claude-backup exited with $code"
             if grep -qiE '401|403|unauthorized|forbidden' "$RUNNER_TEMP/stderr.log"; then
               echo "::error::Login failed: the sessionKey in 1Password (loop/claude-ai-session-key) has probably expired. Copy a fresh one from claude.ai."
+            else
+              # error class only: the full traceback may contain chat or file names
+              grep -oE '[A-Za-z]+(Error|Exception)' "$RUNNER_TEMP/stderr.log" | sort | uniq -c | head -5
             fi
-            tail -40 "$RUNNER_TEMP/stderr.log"
             exit $code
           }
       - name: Summary
@@ -56,8 +60,5 @@ jobs:
             echo "- files: ${files}"
             echo "- size: ${size:-0}"
             echo "- unreachable files: ${unreachable:-0}"
-            if [ "${unreachable:-0}" != "0" ]; then
-              echo; echo '```'; grep '^unreachable file' "$RUNNER_TEMP/stderr.log" | head -50; echo '```'
-            fi
           } >> "$GITHUB_STEP_SUMMARY"
           cat "$GITHUB_STEP_SUMMARY"
