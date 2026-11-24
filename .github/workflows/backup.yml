@@ -1,0 +1,63 @@
+# Back up all claude.ai chats (LAB-88).
+# Stage 1: check only — the backup is made in the runner's temp dir and thrown
+# away; the summary shows how many chats and files came through and which files
+# were unreachable. Storage in R2 comes next.
+# The sessionKey cookie comes from 1Password (vault "loop") via the org secret
+# OP_SERVICE_ACCOUNT_TOKEN; it is never printed.
+name: backup
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install this fork
+        run: pip install -q .
+      - name: Load sessionKey from 1Password
+        id: op
+        uses: 1password/load-secrets-action@v5
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          SESSION_KEY: op://loop/claude-ai-session-key/credential
+      - name: Back up
+        env:
+          SESSION_KEY: ${{ steps.op.outputs.SESSION_KEY }}
+        run: |
+          set -o pipefail
+          printf '%s\n' "$SESSION_KEY" | claude-backup "$RUNNER_TEMP/backup" 2> "$RUNNER_TEMP/stderr.log" > "$RUNNER_TEMP/stdout.log" || {
+            code=$?
+            echo "::error::claude-backup exited with $code"
+            if grep -qiE '401|403|unauthorized|forbidden' "$RUNNER_TEMP/stderr.log"; then
+              echo "::error::Login failed: the sessionKey in 1Password (loop/claude-ai-session-key) has probably expired. Copy a fresh one from claude.ai."
+            fi
+            tail -40 "$RUNNER_TEMP/stderr.log"
+            exit $code
+          }
+      - name: Summary
+        if: always()
+        run: |
+          d="$RUNNER_TEMP/backup"
+          chats=$(find "$d" -path '*/chats/*.json' 2>/dev/null | wc -l)
+          files=$(find "$d" -path '*/files/*' -type f 2>/dev/null | wc -l)
+          size=$(du -sh "$d" 2>/dev/null | cut -f1)
+          unreachable=$(grep -c '^unreachable file' "$RUNNER_TEMP/stderr.log" 2>/dev/null || true)
+          {
+            echo "## claude-backup"
+            echo "- chats: ${chats}"
+            echo "- files: ${files}"
+            echo "- size: ${size:-0}"
+            echo "- unreachable files: ${unreachable:-0}"
+            if [ "${unreachable:-0}" != "0" ]; then
+              echo; echo '```'; grep '^unreachable file' "$RUNNER_TEMP/stderr.log" | head -50; echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"
